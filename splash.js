@@ -1,6 +1,7 @@
-// 우성오락실 로고 인트로 — 게임을 켜면 맨 처음 약 3초 동안 나오는 로딩 화면.
-// 글자 로고: 오락실 간판처럼 입체로 튀어나온 "우성오락실"이 한 글자씩 떨어지고, 네온이 깜빡 켜진 뒤 빛줄기가 지나간다.
-// 게임 위에 캔버스를 하나 덮어 그리고, 끝나면 스스로 사라진다. 화면을 누르면 바로 건너뛴다.
+// 우성오락실 로고 인트로 — 게임을 켜면 맨 처음 나오는 화면.
+// 옛날 오락실처럼 "화면을 터치하세요"가 깜빡이고, 터치하면(브라우저는 터치 전엔 소리를 막으므로) 소리와 함께 시작:
+// 브라운관이 지잉 켜지고 → "우성오락실"이 한 글자씩 뿅! 뿅! 떨어지고 → 네온이 지지직 → 빛줄기가 띠링~.
+// 그 터치로 게임 소리도 함께 켠다. 게임 위에 캔버스를 하나 덮어 그리고, 끝나면 스스로 사라진다. 연출 중 다시 누르면 건너뛴다.
 // 어느 게임에든 game.js 다음에 <script src="splash.js"> 한 줄로 붙일 수 있다.
 (function () {
   "use strict";
@@ -26,14 +27,62 @@
 
   const STARS = Array.from({ length: 60 }, () => ({ x: Math.random(), y: Math.random() * 0.55, p: Math.random() * 6 }));
   const SPARKS = [];
-  let t0 = null, skipAt = null, done = false, shake = 0;
+  let t0 = null, skipAt = null, done = false, shake = 0, armed = false, idleT0 = null;
+  const KO = (navigator.language || "ko").toLowerCase().startsWith("ko");
   const landed = TITLE.map(() => false);
 
   const now = () => performance.now() / 1000;
   const R = Math.round;
 
   // 누르면 건너뛰기 (게임 쪽으로 터치가 새지 않게 막음)
-  const skip = e => { e.preventDefault(); e.stopPropagation(); if (skipAt === null) skipAt = now(); };
+  const skip = e => {
+    e.preventDefault(); e.stopPropagation();
+    try { if (typeof window.ensureAudio === "function") window.ensureAudio(); } catch (_) {}   // 이 터치로 게임 소리도 켬
+    if (!armed) { armed = true; t0 = now(); playJingle(); return; }   // 첫 터치: 연출 시작
+    if (skipAt === null) { skipAt = now(); hush(); }                  // 연출 중 터치: 건너뛰기
+  };
+
+  // ── 효과음 (이 화면 전용 오디오) ──
+  let sx = null, sOut = null, noiseBuf = null;
+  function muted() {
+    try { const y = window.ytgame; if (y && y.IN_PLAYABLES_ENV && !y.system.isAudioEnabled()) return true; } catch (_) {}
+    return false;
+  }
+  function osc(type, f0, f1, at, dur, vol) {
+    const o = sx.createOscillator(), g = sx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, at); if (f1) o.frequency.exponentialRampToValueAtTime(f1, at + dur * 0.6);
+    g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(vol, at + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    o.connect(g); g.connect(sOut); o.start(at); o.stop(at + dur + 0.02);
+  }
+  function hiss(at, dur, vol, hp) {
+    const b = sx.createBufferSource(), f = sx.createBiquadFilter(), g = sx.createGain();
+    b.buffer = noiseBuf; f.type = "highpass"; f.frequency.value = hp;
+    g.gain.setValueAtTime(vol, at); g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+    b.connect(f); f.connect(g); g.connect(sOut); b.start(at); b.stop(at + dur);
+  }
+  function playJingle() {
+    if (REDUCED || muted()) return;
+    try {
+      sx = new (window.AudioContext || window.webkitAudioContext)();
+      sOut = sx.createGain(); sOut.gain.value = 0.55; sOut.connect(sx.destination);
+      noiseBuf = sx.createBuffer(1, sx.sampleRate * 0.3, sx.sampleRate);
+      const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    } catch (_) { sx = null; return; }
+    const S = sx.currentTime + 0.03;
+    osc("sawtooth", 70, 900, S, 0.28, 0.08); hiss(S, 0.2, 0.06, 1500);          // 브라운관 켜짐: 지잉
+    const NOTES = [523.3, 659.3, 784.0, 1046.5, 1318.5];                         // 도 미 솔 도 미 — 한 글자씩 올라감
+    NOTES.forEach((f, i) => {
+      const at = S + 0.3 + i * 0.12 + 0.32;                                       // 글자가 바닥에 닿는 순간 (drawTitle 과 같은 시각)
+      osc("square", f, f * 2.4, at, 0.16, 0.2);                                   // 뿅!
+      osc("sine", 170, 55, at, 0.12, 0.3);                                        // 쿵 (착지)
+    });
+    for (const at of [S + 1.25, S + 1.37]) { hiss(at, 0.06, 0.12, 3000); osc("sawtooth", 110, 0, at, 0.06, 0.06); }   // 네온 지지직
+    [1568, 2093, 2637, 3136].forEach((f, i) => osc("triangle", f, 0, S + 1.75 + i * 0.06, 0.35, 0.08));   // 빛줄기: 띠링~
+  }
+  function hush() {                                                  // 건너뛰면 소리도 살짝 줄이며 끔
+    if (!sx) return;
+    const t = sx.currentTime; sOut.gain.cancelScheduledValues(t); sOut.gain.setValueAtTime(sOut.gain.value, t); sOut.gain.linearRampToValueAtTime(0, t + 0.15);
+  }
   cv.addEventListener("pointerdown", skip);
   window.addEventListener("keydown", function k(e) { if (done) return window.removeEventListener("keydown", k, true); skip(e); }, true);
 
@@ -132,9 +181,27 @@
   }
 
   let hold = null;                                                // 확인용: WSA_SPLASH.seek(초) 로 그 순간에 멈춤
-  window.WSA_SPLASH = { seek(sec) { hold = sec; } };
+  window.WSA_SPLASH = { seek(sec) { hold = sec; armed = true; if (t0 === null) t0 = now(); } };
+  function waiting(n) {                                              // 터치 전: 별·격자 배경 + "화면을 터치하세요"
+    if (idleT0 === null) idleT0 = n;
+    const t = n - idleT0, u = Math.min(w, h * 0.62) / 100;
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawBg(t, u);
+    if (Math.floor(t * 2) % 2 === 0 || REDUCED) {
+      const size = R(Math.min(w / 11, h * 0.06));
+      cx.font = `${size}px ${FONT}`; cx.textAlign = "center"; cx.textBaseline = "middle";
+      const msg = KO ? "화면을 터치하세요" : "TAP TO START";
+      cx.fillStyle = C.ink; cx.fillText(msg, w / 2 + 3, h * 0.42 + 3);
+      cx.fillStyle = C.yellow; cx.fillText(msg, w / 2, h * 0.42);
+      cx.font = `${R(size * 0.45)}px ${FONT}`; cx.fillStyle = C.cyan;
+      cx.fillText(KO ? "TOUCH TO START  ♪" : "♪ SOUND ON", w / 2, h * 0.42 + size * 1.1);
+    }
+    cx.fillStyle = "rgba(0,0,0,.14)"; for (let y = 0; y < h; y += 4) cx.fillRect(0, y, w, 1);
+    requestAnimationFrame(frame);
+  }
   function frame() {
-    const n = now(); if (t0 === null) t0 = n;
+    const n = now();
+    if (!armed) return waiting(n);
     const t = hold !== null ? hold : n - t0;
     let fade = 0;
     if (skipAt !== null) fade = Math.min(1, (n - skipAt) / 0.25);
@@ -159,7 +226,11 @@
     cx.fillStyle = "rgba(0,0,0,.14)";                              // 주사선
     for (let y = 0; y < h; y += 4) cx.fillRect(0, y, w, 1);
     cv.style.opacity = String(1 - fade);
-    if (fade >= 1) { done = true; window.removeEventListener("resize", fit); cv.remove(); return; }
+    if (fade >= 1) {
+      done = true; window.removeEventListener("resize", fit); cv.remove();
+      if (sx) setTimeout(() => { try { sx.close(); } catch (_) {} }, 1500);   // 남은 소리가 끝나면 정리
+      return;
+    }
     requestAnimationFrame(frame);
   }
   const go = () => requestAnimationFrame(frame);
